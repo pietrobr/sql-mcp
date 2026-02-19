@@ -1,0 +1,232 @@
+{
+  "$schema": "https://github.com/Azure/data-api-builder/releases/download/v1.7.86/dab.draft.schema.json",
+  "data-source": {
+    "database-type": "mssql",
+    "connection-string": "@env('DATABASE_CONNECTION_STRING')",
+    "options": {
+      "set-session-context": false
+    }
+  },
+  "runtime": {
+    "rest": {
+      "enabled": true,
+      "path": "/api",
+      "request-body-strict": true
+    },
+    "graphql": {
+      "enabled": true,
+      "path": "/graphql",
+      "allow-introspection": true
+    },
+    "mcp": {
+      "enabled": true,
+      "path": "/mcp",
+      "description": "SQL MCP Server for an e-commerce database with Categories, Products, Customers, Orders, and OrderItems. Use this to query product catalog, customer information, and order history."
+    },
+    "host": {
+      "cors": {
+        "origins": [],
+        "allow-credentials": false
+      },
+      "authentication": {
+        "provider": "AppService"
+      },
+      "mode": "development"
+    }
+  },
+  "entities": {
+    "Category": {
+      "description": "Product categories used to organize the catalog. Each category groups related products.",
+      "source": {
+        "object": "dbo.Categories",
+        "type": "table"
+      },
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "Category",
+          "plural": "Categories"
+        }
+      },
+      "rest": {
+        "enabled": true
+      },
+      "permissions": [
+        {
+          "role": "anonymous",
+          "actions": [
+            {
+              "action": "*"
+            }
+          ]
+        }
+      ],
+      "relationships": {
+        "products": {
+          "cardinality": "many",
+          "target.entity": "Product",
+          "source.fields": ["id"],
+          "target.fields": ["category_id"]
+        }
+      }
+    },
+    "Product": {
+      "description": "Products available for purchase. Each product belongs to one category and has a price.",
+      "source": {
+        "object": "dbo.Products",
+        "type": "table"
+      },
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "Product",
+          "plural": "Products"
+        }
+      },
+      "rest": {
+        "enabled": true
+      },
+      "permissions": [
+        {
+          "role": "anonymous",
+          "actions": [
+            {
+              "action": "*"
+            }
+          ]
+        }
+      ],
+      "relationships": {
+        "category": {
+          "cardinality": "one",
+          "target.entity": "Category",
+          "source.fields": ["category_id"],
+          "target.fields": ["id"]
+        },
+        "orderItems": {
+          "cardinality": "many",
+          "target.entity": "OrderItem",
+          "source.fields": ["id"],
+          "target.fields": ["product_id"]
+        }
+      }
+    },
+    "Customer": {
+      "description": "Registered customers who can place orders. Contains name and email.",
+      "source": {
+        "object": "dbo.Customers",
+        "type": "table"
+      },
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "Customer",
+          "plural": "Customers"
+        }
+      },
+      "rest": {
+        "enabled": true
+      },
+      "permissions": [
+        {
+          "role": "anonymous",
+          "actions": [
+            {
+              "action": "*"
+            }
+          ]
+        }
+      ],
+      "relationships": {
+        "orders": {
+          "cardinality": "many",
+          "target.entity": "Order",
+          "source.fields": ["id"],
+          "target.fields": ["customer_id"]
+        }
+      }
+    },
+    "Order": {
+      "description": "Customer orders with date, total amount, and status (Pending, Processing, Shipped, Completed).",
+      "source": {
+        "object": "dbo.Orders",
+        "type": "table"
+      },
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "Order",
+          "plural": "Orders"
+        }
+      },
+      "rest": {
+        "enabled": true
+      },
+      "permissions": [
+        {
+          "role": "anonymous",
+          "actions": [
+            {
+              "action": "*"
+            }
+          ]
+        }
+      ],
+      "relationships": {
+        "customer": {
+          "cardinality": "one",
+          "target.entity": "Customer",
+          "source.fields": ["customer_id"],
+          "target.fields": ["id"]
+        },
+        "orderItems": {
+          "cardinality": "many",
+          "target.entity": "OrderItem",
+          "source.fields": ["id"],
+          "target.fields": ["order_id"]
+        }
+      }
+    },
+    "OrderItem": {
+      "description": "Line items within an order. Links an order to a product with quantity and unit price.",
+      "source": {
+        "object": "dbo.OrderItems",
+        "type": "table"
+      },
+      "graphql": {
+        "enabled": true,
+        "type": {
+          "singular": "OrderItem",
+          "plural": "OrderItems"
+        }
+      },
+      "rest": {
+        "enabled": true
+      },
+      "permissions": [
+        {
+          "role": "anonymous",
+          "actions": [
+            {
+              "action": "*"
+            }
+          ]
+        }
+      ],
+      "relationships": {
+        "order": {
+          "cardinality": "one",
+          "target.entity": "Order",
+          "source.fields": ["order_id"],
+          "target.fields": ["id"]
+        },
+        "product": {
+          "cardinality": "one",
+          "target.entity": "Product",
+          "source.fields": ["product_id"],
+          "target.fields": ["id"]
+        }
+      }
+    }
+  }
+}
