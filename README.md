@@ -134,6 +134,26 @@ The SQL MCP Server exposes 6 DML tools:
 
 The agent **never generates raw SQL**. Instead, it calls structured MCP tools → DAB's Query Builder generates deterministic T-SQL internally. This eliminates the risks of AI-generated SQL.
 
+## Query Tracer UI
+
+A Streamlit-based UI to visualize the SQL queries that DAB generates when the AI agent calls MCP tools.
+
+![Query Tracer Screenshot](docs/query_tracer_screenshot.png)
+
+### Features
+- **Real-time SQL tracing** via Azure SQL Query Store
+- **Query classification** — maps each SQL statement back to the probable MCP tool (`read_records`, `create_record`, etc.)
+- **Performance metrics** — duration, CPU, IO reads, row count per query
+- **Timeline chart** — visual bar chart of query durations over time
+- **Built-in agent launcher** — run `test_agent.py` directly from the UI
+- **Filters** — by query type (SELECT/INSERT/UPDATE/DELETE), table, time window
+
+### Run the tracer
+
+```bash
+streamlit run query_tracer.py
+```
+
 ## Azure Resources Created
 
 | Resource | Name |

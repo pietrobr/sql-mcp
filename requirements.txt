@@ -2,3 +2,6 @@ azure-ai-projects>=1.0.0
 azure-ai-agents
 azure-identity
 python-dotenv
+streamlit
+pyodbc
+pandas
