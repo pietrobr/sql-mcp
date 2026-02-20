@@ -247,16 +247,13 @@ with c4:
 
 # ── Custom agent query ───────────────────────────────────────
 st.markdown("---")
-cq_col1, cq_col2 = st.columns([5, 1])
-with cq_col1:
+with st.form("custom_query_form", clear_on_submit=False):
     custom_query = st.text_input(
         "💬 Chiedi all'agente",
         placeholder="es: Qual è il prodotto più venduto per quantità?",
-        value="",
         label_visibility="collapsed",
     )
-with cq_col2:
-    send_custom = st.button("🚀  Invia", use_container_width=True, disabled=not custom_query)
+    send_custom = st.form_submit_button("🚀  Invia", use_container_width=True)
 st.caption(
     "Scrivi una domanda in linguaggio naturale e l'agente la eseguirà tramite MCP → DAB → SQL. "
     "Esempio: *Qual è il prodotto più venduto per quantità?*"
@@ -293,10 +290,10 @@ if test_query:
 def _run_agent_subprocess(extra_args=None):
     """Run test_agent.py as a subprocess, optionally with extra CLI args."""
     env = os.environ.copy()
-    env["PATH"] = (
-        r"C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin;"
-        + env.get("PATH", "")
-    )
+    # Add Azure CLI to PATH on Windows (harmless no-op on Linux)
+    az_cli_path = r"C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin"
+    if os.path.isdir(az_cli_path):
+        env["PATH"] = az_cli_path + ";" + env.get("PATH", "")
     cmd = [sys.executable, "test_agent.py"] + (extra_args or [])
     try:
         res = subprocess.run(
@@ -311,9 +308,13 @@ def _run_agent_subprocess(extra_args=None):
         st.session_state["a_err"] = res.stderr
         st.session_state["a_rc"] = res.returncode
     except subprocess.TimeoutExpired:
-        st.error("Timeout dopo 10 min")
+        st.session_state["a_out"] = ""
+        st.session_state["a_err"] = "Timeout dopo 10 min"
+        st.session_state["a_rc"] = -1
     except Exception as e:
-        st.error(f"Errore: {e}")
+        st.session_state["a_out"] = ""
+        st.session_state["a_err"] = str(e)
+        st.session_state["a_rc"] = -1
 
 
 if run_agent:
@@ -324,13 +325,17 @@ if send_custom and custom_query:
     with st.spinner(f"🤖 Invio all'agente: *{custom_query[:80]}*…"):
         _run_agent_subprocess(["--query", custom_query])
 
-if st.session_state.get("a_out"):
-    with st.expander("📋 Output dell'agent", expanded=False):
+if st.session_state.get("a_out") or st.session_state.get("a_err"):
+    with st.expander("📋 Output dell'agent", expanded=True):
         rc = st.session_state.get("a_rc", 0)
         (st.success if rc == 0 else st.error)(
             f"{'Completato' if rc == 0 else 'Fallito'} (exit {rc})"
         )
-        st.code(st.session_state["a_out"][:8000], language="text")
+        if st.session_state.get("a_out"):
+            st.code(st.session_state["a_out"][:8000], language="text")
+        if st.session_state.get("a_err"):
+            st.markdown("**Stderr:**")
+            st.code(st.session_state["a_err"][:4000], language="text")
 
 st.divider()
 
