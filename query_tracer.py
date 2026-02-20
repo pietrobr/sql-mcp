@@ -233,17 +233,31 @@ st.caption(
 )
 
 # ── Action buttons row ───────────────────────────────────────
+def _set_action(action):
+    st.session_state["btn_action"] = action
+
 c1, c2, c3, c4 = st.columns(4)
 with c1:
-    run_agent = st.button(
+    st.button(
         "▶️  Lancia Agent Test", type="primary", use_container_width=True,
+        on_click=_set_action, args=("run_agent",),
     )
 with c2:
     st.button("🔄  Aggiorna Query", use_container_width=True)
 with c3:
-    test_query = st.button("🧪  Test Query", use_container_width=True)
+    st.button(
+        "🧪  Test Query", use_container_width=True,
+        on_click=_set_action, args=("test_query",),
+    )
 with c4:
-    clear_qs = st.button("🗑️  Pulisci Query Store", use_container_width=True)
+    st.button(
+        "🗑️  Pulisci Query Store", use_container_width=True,
+        on_click=_set_action, args=("clear_qs",),
+    )
+
+# Read and clear action flag (set by on_click callbacks)
+btn_action = st.session_state.pop("btn_action", None)
+print(f"[TRACER] RERUN: btn_action={btn_action}", flush=True)
 
 # ── Custom agent query ───────────────────────────────────────
 st.markdown("---")
@@ -259,7 +273,7 @@ st.caption(
     "Esempio: *Qual è il prodotto più venduto per quantità?*"
 )
 
-if clear_qs:
+if btn_action == "clear_qs":
     try:
         ac = _new_connection()
         ac.autocommit = True
@@ -273,7 +287,7 @@ if clear_qs:
     except Exception as e:
         st.error(f"Errore pulizia: {e}")
 
-if test_query:
+if btn_action == "test_query":
     try:
         cur = conn.cursor()
         cur.execute("SELECT TOP 3 p.name, p.price, c.name AS category FROM dbo.Products p JOIN dbo.Categories c ON p.category_id = c.id ORDER BY p.price DESC")
@@ -295,6 +309,8 @@ def _run_agent_subprocess(extra_args=None):
     if os.path.isdir(az_cli_path):
         env["PATH"] = az_cli_path + ";" + env.get("PATH", "")
     cmd = [sys.executable, "test_agent.py"] + (extra_args or [])
+    print(f"[TRACER] subprocess cmd={cmd}", flush=True)
+    print(f"[TRACER] subprocess cwd={os.path.dirname(os.path.abspath(__file__))}", flush=True)
     try:
         res = subprocess.run(
             cmd,
@@ -307,23 +323,32 @@ def _run_agent_subprocess(extra_args=None):
         st.session_state["a_out"] = res.stdout
         st.session_state["a_err"] = res.stderr
         st.session_state["a_rc"] = res.returncode
+        print(f"[TRACER] subprocess finished rc={res.returncode} stdout_len={len(res.stdout)} stderr_len={len(res.stderr)}", flush=True)
+        if res.stderr:
+            print(f"[TRACER] subprocess stderr (first 500): {res.stderr[:500]}", flush=True)
     except subprocess.TimeoutExpired:
         st.session_state["a_out"] = ""
         st.session_state["a_err"] = "Timeout dopo 10 min"
         st.session_state["a_rc"] = -1
+        print("[TRACER] subprocess TIMEOUT", flush=True)
     except Exception as e:
         st.session_state["a_out"] = ""
         st.session_state["a_err"] = str(e)
         st.session_state["a_rc"] = -1
+        print(f"[TRACER] subprocess EXCEPTION: {e}", flush=True)
 
 
-if run_agent:
+if btn_action == "run_agent":
+    print("[TRACER] >>> AGENT BUTTON CLICKED — starting subprocess", flush=True)
     with st.spinner("🤖 Agent in esecuzione (~2 min per 5 query)…"):
         _run_agent_subprocess()
+    print(f"[TRACER] <<< AGENT DONE rc={st.session_state.get('a_rc')}", flush=True)
 
 if send_custom and custom_query:
+    print(f"[TRACER] >>> CUSTOM QUERY: {custom_query[:80]}", flush=True)
     with st.spinner(f"🤖 Invio all'agente: *{custom_query[:80]}*…"):
         _run_agent_subprocess(["--query", custom_query])
+    print(f"[TRACER] <<< CUSTOM DONE rc={st.session_state.get('a_rc')}", flush=True)
 
 if st.session_state.get("a_out") or st.session_state.get("a_err"):
     with st.expander("📋 Output dell'agent", expanded=True):
