@@ -207,7 +207,57 @@ conn.close()
     echo "    GRANT ALTER ON DATABASE::[$SQL_DATABASE] TO [$CONTAINER_APP_NAME];"
 }
 
-# ── 9. Get the app URL ───────────────────────────────────────
+# ── 9. Grant AI Foundry RBAC to managed identity ─────────────
+# The Container App needs these roles to create and run AI agents.
+# Derives the AI Services resource from PROJECT_ENDPOINT.
+if [ -n "$PROJECT_ENDPOINT" ] && [ -n "$IDENTITY_PRINCIPAL" ]; then
+    echo "▶ Granting AI Foundry RBAC roles..."
+
+    # Parse PROJECT_ENDPOINT: https://<resource>.services.ai.azure.com/api/projects/<project>
+    AI_RESOURCE_NAME=$(echo "$PROJECT_ENDPOINT" | sed -n 's|https://\([^.]*\)\.services\.ai\.azure\.com.*|\1|p')
+    AI_PROJECT_NAME=$(echo "$PROJECT_ENDPOINT" | sed -n 's|.*/api/projects/\([^/]*\).*|\1|p')
+
+    if [ -n "$AI_RESOURCE_NAME" ]; then
+        # Find the full resource ID (may be in a different resource group)
+        AI_RESOURCE_ID=$(az cognitiveservices account list \
+          --query "[?name=='$AI_RESOURCE_NAME'].id | [0]" -o tsv 2>/dev/null || echo "")
+
+        if [ -z "$AI_RESOURCE_ID" ]; then
+            echo "  ⚠ Could not find AI Services resource '$AI_RESOURCE_NAME'. Assign roles manually."
+        else
+            echo "  AI Services resource: $AI_RESOURCE_ID"
+
+            # Roles needed at the AI Services resource (account) level
+            for ROLE in "Azure AI User" "Azure AI Developer" "Cognitive Services OpenAI User" "Cognitive Services User"; do
+                az role assignment create \
+                  --assignee "$IDENTITY_PRINCIPAL" \
+                  --role "$ROLE" \
+                  --scope "$AI_RESOURCE_ID" \
+                  --output none 2>/dev/null && echo "  ✓ $ROLE (resource)" \
+                  || echo "  · $ROLE (resource) — already assigned or failed"
+            done
+
+            # Azure AI User also needed at project scope
+            if [ -n "$AI_PROJECT_NAME" ]; then
+                PROJECT_SCOPE="${AI_RESOURCE_ID}/projects/${AI_PROJECT_NAME}"
+                az role assignment create \
+                  --assignee "$IDENTITY_PRINCIPAL" \
+                  --role "Azure AI User" \
+                  --scope "$PROJECT_SCOPE" \
+                  --output none 2>/dev/null && echo "  ✓ Azure AI User (project)" \
+                  || echo "  · Azure AI User (project) — already assigned or failed"
+            fi
+        fi
+    else
+        echo "  ⚠ Could not parse AI resource name from PROJECT_ENDPOINT."
+    fi
+else
+    if [ -z "$PROJECT_ENDPOINT" ]; then
+        echo "  ℹ PROJECT_ENDPOINT not set — skipping AI Foundry RBAC."
+    fi
+fi
+
+# ── 10. Get the app URL ──────────────────────────────────────
 APP_FQDN=$(az containerapp show \
   --name "$CONTAINER_APP_NAME" \
   --resource-group "$RESOURCE_GROUP" \
