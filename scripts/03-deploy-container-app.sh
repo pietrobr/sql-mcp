@@ -45,17 +45,21 @@ echo "║ SQL Server      : $SQL_FQDN"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 
-# ── 1. Create Azure Container Registry ──────────────────────
-echo "▶ Creating Azure Container Registry..."
-az acr create \
-  --name "$ACR_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --location "$LOCATION" \
-  --sku Basic \
-  --admin-enabled true \
-  --output none
-
-ACR_LOGIN_SERVER=$(az acr show --name "$ACR_NAME" --resource-group "$RESOURCE_GROUP" --query loginServer -o tsv)
+# ── 1. Ensure Azure Container Registry exists ───────────────
+ACR_LOGIN_SERVER=$(az acr show --name "$ACR_NAME" --resource-group "$RESOURCE_GROUP" --query loginServer -o tsv 2>/dev/null || echo "")
+if [ -z "$ACR_LOGIN_SERVER" ]; then
+    echo "▶ Creating Azure Container Registry..."
+    az acr create \
+      --name "$ACR_NAME" \
+      --resource-group "$RESOURCE_GROUP" \
+      --location "$LOCATION" \
+      --sku Basic \
+      --admin-enabled true \
+      --output none
+    ACR_LOGIN_SERVER=$(az acr show --name "$ACR_NAME" --resource-group "$RESOURCE_GROUP" --query loginServer -o tsv)
+else
+    echo "  ACR already exists."
+fi
 echo "  → ACR: $ACR_LOGIN_SERVER"
 
 # ── 2. Build image in ACR (no local Docker needed) ──────────
@@ -67,13 +71,18 @@ az acr build \
   --file "$PROJECT_DIR/Dockerfile" \
   "$PROJECT_DIR"
 
-# ── 3. Create Container App Environment ─────────────────────
-echo "▶ Creating Container App Environment..."
-az containerapp env create \
-  --name "$CONTAINER_APP_ENV" \
-  --resource-group "$RESOURCE_GROUP" \
-  --location "$LOCATION" \
-  --output none
+# ── 3. Ensure Container App Environment exists ──────────────
+ENV_STATE=$(az containerapp env show --name "$CONTAINER_APP_ENV" --resource-group "$RESOURCE_GROUP" --query "properties.provisioningState" -o tsv 2>/dev/null || echo "")
+if [ "$ENV_STATE" = "Succeeded" ]; then
+    echo "  Container App Environment already exists."
+else
+    echo "▶ Creating Container App Environment..."
+    az containerapp env create \
+      --name "$CONTAINER_APP_ENV" \
+      --resource-group "$RESOURCE_GROUP" \
+      --location "$LOCATION" \
+      --output none
+fi
 
 # ── 4. Get ACR credentials ──────────────────────────────────
 ACR_USERNAME=$(az acr credential show --name "$ACR_NAME" --resource-group "$RESOURCE_GROUP" --query username -o tsv)
@@ -81,6 +90,16 @@ ACR_PASSWORD=$(az acr credential show --name "$ACR_NAME" --resource-group "$RESO
 
 # ── 5. Deploy Container App ─────────────────────────────────
 echo "▶ Deploying Container App..."
+APP_EXISTS=$(az containerapp show --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" --query name -o tsv 2>/dev/null || echo "")
+if [ -n "$APP_EXISTS" ]; then
+    echo "  Updating existing app..."
+    az containerapp update \
+      --name "$CONTAINER_APP_NAME" \
+      --resource-group "$RESOURCE_GROUP" \
+      --image "${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}" \
+      --set-env-vars "DATABASE_CONNECTION_STRING=${DB_CONN_STRING}" \
+      --output none
+else
 az containerapp create \
   --name "$CONTAINER_APP_NAME" \
   --resource-group "$RESOURCE_GROUP" \
@@ -97,6 +116,7 @@ az containerapp create \
   --memory 1.0Gi \
   --env-vars "DATABASE_CONNECTION_STRING=${DB_CONN_STRING}" \
   --output none
+fi
 
 # ── 6. Enable system-assigned managed identity ───────────────
 echo "▶ Enabling managed identity..."
@@ -110,12 +130,39 @@ echo "  → Principal ID: $IDENTITY_PRINCIPAL"
 
 # ── 7. Grant SQL access to managed identity ──────────────────
 echo "▶ Granting SQL access to Container App identity..."
-echo "  ⚠ Run the following T-SQL on $SQL_DATABASE as an AD admin:"
-echo ""
+TOKEN=$(az account get-access-token --resource https://database.windows.net --query accessToken -o tsv)
+export SQL_TOKEN="$TOKEN"
+python3 -c "
+import struct, pyodbc, os
+token = os.environ['SQL_TOKEN']
+raw = token.encode('UTF-16-LE')
+token_struct = struct.pack(f'<I{len(raw)}s', len(raw), raw)
+conn = pyodbc.connect(
+    'Driver={ODBC Driver 17 for SQL Server};'
+    'Server=$SQL_FQDN;Database=$SQL_DATABASE;'
+    'Encrypt=yes;TrustServerCertificate=no;',
+    attrs_before={1256: token_struct},
+    autocommit=True,
+)
+cursor = conn.cursor()
+for sql in [
+    'CREATE USER [$CONTAINER_APP_NAME] FROM EXTERNAL PROVIDER',
+    'ALTER ROLE db_datareader ADD MEMBER [$CONTAINER_APP_NAME]',
+    'ALTER ROLE db_datawriter ADD MEMBER [$CONTAINER_APP_NAME]',
+]:
+    try:
+        cursor.execute(sql)
+        print(f'  OK: {sql}')
+    except Exception as e:
+        if '15023' in str(e) or '15378' in str(e):
+            print(f'  Already exists: {sql}')
+        else:
+            print(f'  WARN: {sql} -> {e}')
+conn.close()
+" 2>&1 || echo "  ⚠ Auto-grant failed. Run manually:"
 echo "    CREATE USER [$CONTAINER_APP_NAME] FROM EXTERNAL PROVIDER;"
 echo "    ALTER ROLE db_datareader ADD MEMBER [$CONTAINER_APP_NAME];"
 echo "    ALTER ROLE db_datawriter ADD MEMBER [$CONTAINER_APP_NAME];"
-echo ""
 
 # ── 8. Get the app URL ───────────────────────────────────────
 APP_FQDN=$(az containerapp show \

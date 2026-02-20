@@ -28,8 +28,8 @@ SQL_FQDN="${SQL_SERVER_NAME}.database.windows.net"
 SQL_DATABASE="${SQL_DATABASE:-OrdersDB}"
 
 ACR_NAME="${ACR_NAME:-sqlmcpacr$(echo "$CURRENT_USER" | tr -d '.')}"
-CONTAINER_APP_ENV="${CONTAINER_APP_ENV:-sql-mcp-env}"
 CONTAINER_APP_NAME="${CONTAINER_APP_NAME:-sql-mcp-tracer}"
+DAB_APP_NAME="${DAB_APP_NAME:-sql-mcp-dab}"
 IMAGE_NAME="sql-mcp-tracer"
 IMAGE_TAG="latest"
 
@@ -44,6 +44,7 @@ echo "╠═══════════════════════�
 echo "║ Resource Group  : $RESOURCE_GROUP"
 echo "║ ACR             : $ACR_NAME"
 echo "║ Container App   : $CONTAINER_APP_NAME"
+echo "║ DAB App         : $DAB_APP_NAME"
 echo "║ SQL Server      : $SQL_FQDN"
 echo "║ SQL Database    : $SQL_DATABASE"
 echo "╚══════════════════════════════════════════════════════════╝"
@@ -73,15 +74,27 @@ az acr build \
   --file "$PROJECT_DIR/Dockerfile.streamlit" \
   "$PROJECT_DIR"
 
-# ── 3. Ensure Container App Environment exists ──────────────
-ENV_EXISTS=$(az containerapp env show --name "$CONTAINER_APP_ENV" --resource-group "$RESOURCE_GROUP" --query name -o tsv 2>/dev/null || echo "")
-if [ -z "$ENV_EXISTS" ]; then
-    echo "▶ Creating Container App Environment..."
-    az containerapp env create \
-      --name "$CONTAINER_APP_ENV" \
-      --resource-group "$RESOURCE_GROUP" \
-      --location "$LOCATION" \
-      --output none
+# ── 3. Auto-detect Container App Environment from DAB app ───
+echo "▶ Detecting Container App Environment..."
+CONTAINER_APP_ENV=$(az containerapp show --name "$DAB_APP_NAME" --resource-group "$RESOURCE_GROUP" \
+  --query "properties.environmentId" -o tsv 2>/dev/null | xargs -I{} basename {} || echo "")
+
+if [ -z "$CONTAINER_APP_ENV" ]; then
+    CONTAINER_APP_ENV="${CONTAINER_APP_ENV:-sql-mcp-env}"
+    echo "  Could not detect env from DAB app, using default: $CONTAINER_APP_ENV"
+    # Ensure it exists and is healthy
+    ENV_STATE=$(az containerapp env show --name "$CONTAINER_APP_ENV" --resource-group "$RESOURCE_GROUP" \
+      --query "properties.provisioningState" -o tsv 2>/dev/null || echo "")
+    if [ "$ENV_STATE" != "Succeeded" ]; then
+        echo "  Creating Container App Environment..."
+        az containerapp env create \
+          --name "$CONTAINER_APP_ENV" \
+          --resource-group "$RESOURCE_GROUP" \
+          --location "$LOCATION" \
+          --output none
+    fi
+else
+    echo "  Detected environment: $CONTAINER_APP_ENV (from $DAB_APP_NAME)"
 fi
 
 # ── 4. Get ACR credentials ──────────────────────────────────
@@ -90,8 +103,7 @@ ACR_PASSWORD=$(az acr credential show --name "$ACR_NAME" --resource-group "$RESO
 
 # ── 5. Auto-detect MCP_SERVER_URL if not set ─────────────────
 if [ -z "$MCP_SERVER_URL" ]; then
-    DAB_APP="${CONTAINER_APP_NAME/tracer/dab}"
-    DAB_FQDN=$(az containerapp show --name "$DAB_APP" --resource-group "$RESOURCE_GROUP" \
+    DAB_FQDN=$(az containerapp show --name "$DAB_APP_NAME" --resource-group "$RESOURCE_GROUP" \
       --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || echo "")
     if [ -n "$DAB_FQDN" ]; then
         MCP_SERVER_URL="https://${DAB_FQDN}/mcp"
@@ -154,13 +166,46 @@ IDENTITY_PRINCIPAL=$(az containerapp identity assign \
 
 if [ -n "$IDENTITY_PRINCIPAL" ]; then
     echo "  Principal ID: $IDENTITY_PRINCIPAL"
-    echo ""
-    echo "  ⚠ Grant SQL access — run this T-SQL on $SQL_DATABASE as AD admin:"
-    echo ""
+fi
+
+echo "▶ Granting SQL access (data reader + Query Store permissions)..."
+TOKEN=$(az account get-access-token --resource https://database.windows.net --query accessToken -o tsv)
+export SQL_TOKEN="$TOKEN"
+python3 -c "
+import struct, pyodbc, os
+token = os.environ['SQL_TOKEN']
+raw = token.encode('UTF-16-LE')
+token_struct = struct.pack(f'<I{len(raw)}s', len(raw), raw)
+conn = pyodbc.connect(
+    'Driver={ODBC Driver 17 for SQL Server};'
+    'Server=$SQL_FQDN;Database=$SQL_DATABASE;'
+    'Encrypt=yes;TrustServerCertificate=no;',
+    attrs_before={1256: token_struct},
+    autocommit=True,
+)
+cursor = conn.cursor()
+for sql in [
+    'CREATE USER [$CONTAINER_APP_NAME] FROM EXTERNAL PROVIDER',
+    'ALTER ROLE db_datareader ADD MEMBER [$CONTAINER_APP_NAME]',
+    'GRANT VIEW DATABASE STATE TO [$CONTAINER_APP_NAME]',
+    'GRANT ALTER ON DATABASE::[$SQL_DATABASE] TO [$CONTAINER_APP_NAME]',
+]:
+    try:
+        cursor.execute(sql)
+        print(f'  OK: {sql}')
+    except Exception as e:
+        if '15023' in str(e) or '15378' in str(e):
+            print(f'  Already exists: {sql}')
+        else:
+            print(f'  WARN: {sql} -> {e}')
+conn.close()
+" 2>&1 || {
+    echo "  ⚠ Auto-grant failed. Run these T-SQL statements manually on $SQL_DATABASE:"
     echo "    CREATE USER [$CONTAINER_APP_NAME] FROM EXTERNAL PROVIDER;"
     echo "    ALTER ROLE db_datareader ADD MEMBER [$CONTAINER_APP_NAME];"
-    echo ""
-fi
+    echo "    GRANT VIEW DATABASE STATE TO [$CONTAINER_APP_NAME];"
+    echo "    GRANT ALTER ON DATABASE::[$SQL_DATABASE] TO [$CONTAINER_APP_NAME];"
+}
 
 # ── 9. Get the app URL ───────────────────────────────────────
 APP_FQDN=$(az containerapp show \
@@ -173,8 +218,4 @@ echo "════════════════════════�
 echo "✅ Streamlit Query Tracer deployed!"
 echo ""
 echo "  URL : https://${APP_FQDN}"
-echo ""
-echo "  ⚠ Remember to grant SQL read access to the managed identity:"
-echo "    CREATE USER [$CONTAINER_APP_NAME] FROM EXTERNAL PROVIDER;"
-echo "    ALTER ROLE db_datareader ADD MEMBER [$CONTAINER_APP_NAME];"
 echo "════════════════════════════════════════════════════════════"
