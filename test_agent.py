@@ -16,9 +16,12 @@ Usage:
     python test_agent.py
 """
 
+import argparse
+import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from azure.identity import DefaultAzureCredential
@@ -155,7 +158,14 @@ def run_query(agents_client, agent, mcp_tool, query):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Test AI Agent with SQL MCP Server")
+    parser.add_argument("--query", type=str, default=None,
+                        help="Run a single custom query instead of the default test suite.")
+    args = parser.parse_args()
+
     validate_config()
+
+    queries = [args.query] if args.query else TEST_QUERIES
 
     credential = DefaultAzureCredential()
     project_client = AIProjectClient(
@@ -171,17 +181,29 @@ def main():
     with project_client:
         agents_client = project_client.agents
         agent = create_agent(agents_client, mcp_tool)
+        trace_log = []
 
         try:
-            for i, query in enumerate(TEST_QUERIES, 1):
+            for i, query in enumerate(queries, 1):
                 if i > 1:
                     print("Waiting 15s to avoid rate limiting...")
                     time.sleep(15)
                 print(f"{'='*70}")
-                print(f"Query {i}/{len(TEST_QUERIES)}: {query}")
+                print(f"Query {i}/{len(queries)}: {query}")
                 print(f"{'='*70}")
 
+                start_utc = datetime.now(timezone.utc).isoformat()
                 response = run_query(agents_client, agent, mcp_tool, query)
+                end_utc = datetime.now(timezone.utc).isoformat()
+
+                trace_log.append({
+                    "index": i,
+                    "query": query,
+                    "start_utc": start_utc,
+                    "end_utc": end_utc,
+                    "response": response[:500] if response else None,
+                })
+
                 if response:
                     print(f"\nAgent response:\n{response}\n")
                 else:
@@ -190,6 +212,20 @@ def main():
         finally:
             agents_client.delete_agent(agent.id)
             print(f"\nAgent {agent.id} deleted. Done.")
+
+            # Save trace log — append to existing if running a single query
+            log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trace_log.json")
+            existing = []
+            if args.query and os.path.exists(log_path):
+                with open(log_path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                # Re-index new entries after existing ones
+                max_idx = max((e["index"] for e in existing), default=0)
+                for e in trace_log:
+                    e["index"] = max_idx + e["index"]
+            with open(log_path, "w", encoding="utf-8") as f:
+                json.dump(existing + trace_log, f, indent=2, ensure_ascii=False)
+            print(f"Trace log saved to {log_path}")
 
 
 if __name__ == "__main__":
