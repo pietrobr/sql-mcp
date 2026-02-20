@@ -77,35 +77,57 @@ python test_agent.py
 
 ## Deploy to Azure Container Apps
 
-### 1. Create Azure SQL resources (already done)
+Automated scripts are provided in `scripts/` to create the full Azure environment.
+
+### Prerequisites
+
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) logged in (`az login`)
+- Python 3.10+ with `pyodbc` installed (for database seeding)
+- ODBC Driver 17 for SQL Server
+
+### Step 1 — Create Azure resources
+
+Creates resource group, Azure SQL Server (Azure AD-only auth), database, and firewall rules.
 
 ```bash
-# Resources already created:
-# - Resource group: rg-sql-mcp
-# - SQL Server: sql-mcp-pietrobr.database.windows.net
-# - Database: OrdersDB
+scripts/01-create-azure-resources.sh
 ```
 
-### 2. Deploy DAB to Container Apps
+### Step 2 — Seed the database
+
+Runs `sql/setup.sql` to create tables and insert sample data. Enables Query Store.
 
 ```bash
-# Create Container App Environment
-az containerapp env create \
-  --name sql-mcp-env \
-  --resource-group rg-sql-mcp \
-  --location westeurope
+scripts/02-seed-database.sh
+```
 
-# Build and deploy (requires Docker or ACR)
-az containerapp up \
-  --name sql-mcp-dab \
-  --resource-group rg-sql-mcp \
-  --environment sql-mcp-env \
-  --source . \
-  --target-port 5000 \
-  --ingress external
+### Step 3 — Deploy DAB to Container Apps
 
-# Update .env with the Container App URL
-# MCP_SERVER_URL=https://<app-name>.<region>.azurecontainerapps.io/mcp
+Builds the Docker image in ACR and deploys to Azure Container Apps.
+
+```bash
+scripts/03-deploy-container-app.sh
+```
+
+After deployment, update `.env` with the MCP URL printed by the script.
+
+### Customization
+
+Override defaults with environment variables:
+
+```bash
+RESOURCE_GROUP=my-rg \
+LOCATION=westeurope \
+SQL_SERVER_NAME=my-sql-server \
+  scripts/01-create-azure-resources.sh
+```
+
+### Teardown
+
+Delete all Azure resources:
+
+```bash
+scripts/99-teardown.sh
 ```
 
 ## DAB Configuration
@@ -166,5 +188,7 @@ streamlit run query_tracer.py
 ## Cleanup
 
 ```bash
+scripts/99-teardown.sh
+# or manually:
 az group delete --name rg-sql-mcp --yes --no-wait
 ```
