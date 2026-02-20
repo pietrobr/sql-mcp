@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 import pandas as pd
 import pyodbc
 import streamlit as st
-from azure.identity import AzureCliCredential
+from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -51,7 +51,7 @@ TYPE_ICON = {
 
 # ── Connection ───────────────────────────────────────────────
 def _new_connection():
-    cred = AzureCliCredential()
+    cred = DefaultAzureCredential()
     tok = cred.get_token("https://database.windows.net/.default")
     raw = tok.token.encode("UTF-16-LE")
     token_struct = struct.pack(f"<I{len(raw)}s", len(raw), raw)

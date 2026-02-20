@@ -111,6 +111,26 @@ scripts/03-deploy-container-app.sh
 
 After deployment, update `.env` with the MCP URL printed by the script.
 
+### Step 4 — Create AI Foundry project & deploy model
+
+Creates an Azure AI Foundry hub, project, and deploys GPT-4o.
+
+```bash
+scripts/04-create-foundry-project.sh
+```
+
+After creation, update `.env` with the `PROJECT_ENDPOINT` and `MODEL_DEPLOYMENT_NAME` printed by the script.
+
+### Step 5 — Deploy Streamlit Query Tracer
+
+Builds and deploys the Query Tracer UI to Azure Container Apps.
+
+```bash
+scripts/05-deploy-streamlit.sh
+```
+
+After deployment, grant SQL read access to the container's managed identity (T-SQL printed by the script).
+
 ### Customization
 
 Override defaults with environment variables:
